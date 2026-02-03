@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
-from nfft import nfft as adjoint #CHANGE IN CONVENTION
-from nfft import nfft_adjoint as nfft #CHANGE IN CONVENTION
+import finufft
+#from nfft import nfft as adjoint #CHANGE IN CONVENTION
+#from nfft import nfft_adjoint as nfft #CHANGE IN CONVENTION
 from scipy.linalg import lu,toeplitz
 #import sym_matrix
 
@@ -9,7 +10,7 @@ def ndft_mat(x,N):
     #non-equispaced discrete Fourier transform Matrix
     k = -(N // 2) + np.arange(N)
    
-    return np.asmatrix(np.exp(2j * np.pi * np.outer(k,x[:,np.newaxis])).T)
+    return np.asmatrix(np.exp(1j * np.outer(k,x[:,np.newaxis])).T)
 
 def change_last_true_to_false(arr):
     
@@ -21,33 +22,209 @@ def change_last_true_to_false(arr):
     
     return arr
 
-def fjr(N):
-    
-    x = np.linspace(-1/2,1/2,N,endpoint=False)
-    w = ((np.sin((N/2) * np.pi * x) / np.sin(np.pi * x)) ** 2) * np.divide(2*(1 + np.exp(-2 * np.pi * 1j * x)),N ** 2)
-    w[x.shape[0] // 2] = 1
-    
+# ============================================================
+# Frequency-domain kernels/windows (CENTERED ORDER)
+# k = -(N//2), ..., (N//2 - 1)
+# All functions return w aligned to this centered k-grid.
+# Default normalization: sum(w) = 1 (L1).
+# ============================================================
+
+def kgrid(N: int) -> np.ndarray:
+    """Centered integer frequency grid: k = -(N//2), ..., (N//2 - 1)."""
+    return -(N // 2) + np.arange(N)
+
+def normalize_l1(w: np.ndarray, eps: float = 1e-30) -> np.ndarray:
+    """Normalize weights so sum(w)=1 (safe)."""
+    s = np.sum(w)
+    if np.abs(s) < eps:
+        raise ValueError("Weight vector sums to ~0; cannot normalize.")
+    return w / s
+
+def enforce_real_if_close(w: np.ndarray, tol: float = 1e-14) -> np.ndarray:
+    """If imaginary part is tiny, drop it (helps keep things clean)."""
+    if np.iscomplexobj(w) and np.max(np.abs(np.imag(w))) < tol:
+        return np.real(w)
     return w
 
-def sobg(z,a,b,g):
-    
-    w = np.divide((0.25 - z ** 2) ** b, g + np.abs(z) ** (2 * a))
-    c = sum(abs(w)) ** (-1)
-    
-    return w * c
+# ------------------------------------------------------------
+# Dirichlet / rectangular window (uniform on kept band)
+# ------------------------------------------------------------
+def w_dirichlet(N: int) -> np.ndarray:
+    """Uniform weights on I_N (rectangular window)."""
+    return np.ones(N, dtype=float) / N
 
-def sobk(N,a,b,g):
-    
-    x = np.linspace(-1/2,1/2,N,endpoint=False)
-    k = np.linspace(-N/2,N/2,N,endpoint=False)
-    w = sobg(k/N,a,b,g)
-    s = np.divide(1 + np.exp(-2 * np.pi * 1j * x),2 * np.sum(adjoint(x,w))) * adjoint(x,w) 
-    #s[x.shape[0]//2] = 1
-    
-    return s
+# ------------------------------------------------------------
+# Fejér / Cesàro (triangular multiplier; real, even, >=0)
+# ------------------------------------------------------------
+def w_fejer(N: int) -> np.ndarray:
+    """
+    Fejér (Cesàro) weights on centered grid.
+    Real, nonnegative, even, sum=1.
+    """
+    k = kgrid(N).astype(float)
+    K = (N // 2) - 1
+    if K <= 0:
+        return w_dirichlet(N)
+    w = np.maximum(0.0, 1.0 - (np.abs(k) / (K + 1.0)))
+    return normalize_l1(w)
+
+
+# ------------------------------------------------------------
+# Jackson-like (stronger damping): (Fejér)^p, renormalized
+# ------------------------------------------------------------
+def w_jackson(N: int, p: int = 2) -> np.ndarray:
+    """
+    Jackson-like weights: (Fejér triangle)^p, renormalized.
+    p=1 -> Fejér, p>1 -> stronger localization.
+    """
+    if p < 1:
+        raise ValueError("p must be >= 1")
+    w = w_fejer(N) ** p
+    return normalize_l1(w)
+
+# ------------------------------------------------------------
+# General admissible-weight construction w(k) from g(k/N)
+# Optionally neighbor-average (as in some constructions).
+# ------------------------------------------------------------
+def w_from_g(N: int, g, average_neighbors: bool = True) -> np.ndarray:
+    """
+    Build weights from an admissible weight function g(z) supported on [-1/2, 1/2],
+    sampled at z = k/N (k on centered grid). Optionally do neighbor-averaging.
+    """
+    k = kgrid(N).astype(float)
+    z = k / float(N)  # approx in [-1/2, 1/2)
+    w0 = np.asarray(g(z), dtype=float)
+    w0 = np.maximum(w0, 0.0)
+
+    if average_neighbors:
+        w = 0.5 * (w0 + np.roll(w0, -1))
+    else:
+        w = w0
+
+    return normalize_l1(w)
+
+# ------------------------------------------------------------
+# B-spline-like family (compact support; beta controls smoothness)
+# Proxy: g_beta(z) ∝ (1/4 - z^2)^(beta-1) on |z|<=1/2
+# ------------------------------------------------------------
+def w_bspline_like(N: int, beta: int = 2) -> np.ndarray:
+    """
+    Compactly-supported B-spline-like weights on z=k/N:
+      g_beta(z) ∝ (1/4 - z^2)^(beta-1) for |z|<=1/2, else 0.
+    beta=1 -> flatter
+    beta=2 -> hat-ish
+    higher -> smoother/more concentrated
+    """
+    if beta < 1:
+        raise ValueError("beta must be >= 1")
+
+    def g(z):
+        base = 0.25 - z**2
+        return np.where(base > 0, base ** (beta - 1), 0.0)
+
+    return w_from_g(N, g, average_neighbors=True)
+
+# ------------------------------------------------------------
+# Sobolev-type weights (matches your sobg idea; as multiplier)
+# g(z) ∝ (1/4 - z^2)^b / (gamma + |z|^(2a)) on |z|<=1/2
+# ------------------------------------------------------------
+
+def w_sobolev(N: int, a: float = 1.0, gamma: float = 1.0, norm: str = "K0") -> np.ndarray:
+    """
+    Sobolev-type frequency weights (CENTERED order):
+      omega_k^{-1} = 1 + gamma * (2π |k|)^(2a)
+      omega_k      = 1 / (1 + gamma * (2π |k|)^(2a))
+
+    norm:
+      - "none": no normalization
+      - "dc":   enforce omega_{k=0} = 1  (already true here)
+      - "K0":   enforce K(0)=sum_k omega_k = 1  (paper's stability assumption)
+    """
+    if a <= 0:
+        raise ValueError("a must be > 0")
+    if gamma <= 0:
+        raise ValueError("gamma must be > 0")
+
+    k = kgrid(N).astype(float)
+    w = 1.0 / (1.0 + gamma * (2.0 * np.pi * np.abs(k)) ** (2.0 * a))
+
+    if norm == "none":
+        return w
+    if norm == "dc":
+        return w / w[N // 2]
+    if norm == "K0":
+        return w / np.sum(w)
+    raise ValueError("norm must be 'none', 'dc', or 'K0'")
+# ------------------------------------------------------------
+# Gaussian window in k
+# ------------------------------------------------------------
+def w_gaussian(N: int, sigma: float = 0.25) -> np.ndarray:
+    """
+    Gaussian multiplier in centered k:
+      w_k ∝ exp(-(k/(sigma*K))^2), K≈N/2.
+    sigma ~ 0.2-0.6 controls width (relative to half-band).
+    """
+    k = kgrid(N).astype(float)
+    K = max(1.0, (N // 2) - 1.0)
+    x = k / (sigma * K)
+    w = np.exp(-(x**2))
+    return normalize_l1(w)
+
+# ------------------------------------------------------------
+# Raised-cosine (Tukey/Hann-like) taper over k
+# ------------------------------------------------------------
+def w_raised_cosine(N: int, alpha: float = 1.0) -> np.ndarray:
+    """
+    Raised-cosine taper over centered k.
+    alpha=1.0 -> full Hann-like taper
+    alpha<1 -> flatter top (Tukey-like)
+    """
+    if not (0.0 < alpha <= 1.0):
+        raise ValueError("alpha must be in (0, 1].")
+    k = kgrid(N).astype(float)
+    K = max(1.0, (N // 2) - 1.0)
+    u = np.abs(k) / K  # in [0, ~1]
+    w = np.zeros(N, dtype=float)
+
+    # Flat region
+    flat = u <= (1 - alpha)
+    w[flat] = 1.0
+
+    # Cosine taper region
+    taper = (u > (1 - alpha)) & (u <= 1.0)
+    # map u from (1-alpha, 1) to (0, pi)
+    v = (u[taper] - (1 - alpha)) / alpha
+    w[taper] = 0.5 * (1 + np.cos(np.pi * v))
+
+    return normalize_l1(w)
+
+# ------------------------------------------------------------
+# 10) “Paper-style” complex factor (1 + e^{-2π i x}) is TIME-domain.
+#     If you *really* want a complex spectral multiplier that mimics
+#     a half-sample shift, use the linear-phase helpers above.
+# ------------------------------------------------------------
+
+# Convenience: dictionary of kernel factories (optional)
+KERNELS = {
+    "dirichlet": w_dirichlet,
+    "fejer": w_fejer,
+    "jackson": w_jackson,
+    "gaussian": w_gaussian,
+    "raised_cosine": w_raised_cosine,
+    "bspline_like": w_bspline_like,
+    "sobolev": w_sobolev,
+    "fejer_shifted": w_fejer_shifted,
+}
+
 
 def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False):
     
+    if x is None:
+        raise ValueError("ERROR: No grid space, x, is specified.")
+
+    if y is None:
+        raise ValueError("ERROR: No amplitude, y, is specified.")
+
     if w is None:
         w = np.ones(N) / N
         Warning("No weight function input; normalized uniform weight for all frequencies")
@@ -59,12 +236,15 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False):
     
     if approx == False:
         L,U = lu(AhA,permute_l=True)
-        fk = nfft(x,y,N) @ (np.diag(w) - np.diag(w) @ L @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L) @ U @ np.diag(w))
+        #fk = nfft(x,y,N) @ (np.diag(w) - np.diag(w) @ L @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L) @ U @ np.diag(w))
+        fk = finufft.nufft1d1(x,y,N,isign=-1) @ (np.diag(w) - np.diag(w) @ L @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L) @ U @ np.diag(w))
     else:
-        fk = (nfft(x,y,N) @ np.diag(w)) @ np.linalg.pinv(len(x) * np.diag(w) + np.eye(N))
+        fk = (finufft.nufft1d1(x,y,N,isign=-1) @ np.diag(w)) @ np.linalg.pinv(len(x) * np.diag(w) + np.eye(N))
+        #fk = (nfft(x,y,N) @ np.diag(w)) @ np.linalg.pinv(len(x) * np.diag(w) + np.eye(N))
     
     if return_adjoint == True:
-        fj = np.real(adjoint(x,fk))
+        #fj = np.real(adjoint(x,fk))
+        fj = np.real(finufft.nufft1d2(x,fk,isign=+1))
         res_abs = np.sum(np.abs(y - fj) ** 2)
         res_rel = res_abs / np.sum(y ** 2)
     else:
@@ -197,7 +377,8 @@ def adjoint_transform_2d(transformed_data, mtot, data_shape):
     # Step 2: Column-wise adjoint transform
     for jj in range(data_shape[1]):
         # Perform the adjoint operation
-        adjoint_result = adjoint(t, iftot[:, jj])
+        #adjoint_result = adjoint(t, iftot[:, jj])
+        adjoint_result = finufft.nufft1d2(t, iftot[:,jj], isign=+1)
 
         # Restore mean and NaNs
         reconstructed_column = adjoint_result + mtot[jj]
@@ -224,7 +405,9 @@ def compute_sym_matrix_optimized(f_j, h_k):
     # Compute the unique values for the first column.
     # The lag for entry (0, k) is h_k[k] - h_k[0] = d * k.
     lags = d * np.arange(N)
-    col = np.array([np.sum(np.exp(-2 * np.pi * 1j * f_j * lag)) for lag in lags])
+    #col = np.array([np.sum(np.exp(-2 * np.pi * 1j * f_j * lag)) for lag in lags])
+    col = np.array([np.sum(np.exp(1j * f_j * lag)) for lag in lags])
+
 
     # For a Toeplitz matrix, the entry A[i,j] depends only on (j-i).
     # Since A[0,j] is given by 'col', we build the full matrix.

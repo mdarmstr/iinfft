@@ -4,6 +4,7 @@ from iinfft.iinfft import *
 plt.style.use('tableau-colorblind10')
 import pandas as pd
 #import sym_matrix
+import finufft
 
 import matplotlib
 matplotlib.use('TkAgg')
@@ -18,23 +19,51 @@ rec_mat = np.zeros_like(data_raw,dtype="float64")
 mni = np.zeros((df.shape[1]-1,1))
 
 N = 1024
-t = np.linspace(-0.5,0.5,Ln,endpoint=False)
+t = 2*np.pi*np.linspace(-0.5,0.5,Ln,endpoint=False)
 inverse_mat = np.zeros((N,df.shape[1]-1),dtype="complex128")
+#w = w_fejer(N)
+w = w_raised_cosine(N,1)
 #w = fjr(N)
-w = sobk(N,1,2,1e-2)
+#w = sobk(N,1,2,1e-2)
 
-dat = data_raw[:,4]
+# N = 64
+# k = kgrid(N)
+
+# kernels = {
+#     "Dirichlet": w_dirichlet(N),
+#     "Fejér": w_fejer(N),
+#     "Jackson (p=2)": w_jackson(N, p=2),
+#     "Gaussian (σ=0.25)": w_gaussian(N, sigma=0.25),
+#     "Raised cosine (α=1)": w_raised_cosine(N, alpha=1.0),
+#     "B-spline-like (β=2)": w_bspline_like(N, beta=2),
+#     "Sobolev (a=1,b=2,γ=1e-2)": w_sobolev(N, a=1.0, gamma=1e-2)
+# }
+
+# for name, w in kernels.items():
+#     plt.figure()
+#     plt.plot(k, N*np.abs(np.fft.ifftshift(np.fft.ifft(np.fft.fftshift(w)))))
+#     plt.title(f"Real part of {name} kernel (N={N})")
+#     plt.xlabel("k (centered frequency index)")
+#     plt.ylabel("Re{w_k}")
+#     plt.grid(True)
+#     plt.show()
+
+dat = data_raw[:,4].astype(np.complex128)
 
 idx = dat != -9999
 if sum(idx) % 2 != 0:
     idx = change_last_true_to_false(idx)
 
-dat_clean = dat[idx].copy()
+dat_clean = dat[idx].copy().astype(np.complex128)
 h_k = -(N // 2 ) + np.arange(N)
 AhA = compute_sym_matrix_optimized(t[idx],h_k)
 
 ftot, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w)
-ytot = adjoint(t,ftot) + np.mean(dat[idx])
+#ytot = adjoint(t,ftot) + np.mean(dat[idx])
+ytot = finufft.nufft1d2(t,ftot,isign=+1) + np.mean(dat[idx])
+
+# plt.plot(np.real(ftot))
+# plt.show()
 
 ax = plt.gca()
 
@@ -46,7 +75,9 @@ infft_line, = ax.plot(t,ytot,c='C4',label='iNFFT')
 
 #Scatter plot of truncated iFFT
 fapprox, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w,approx=True)
-yapp = adjoint(t,fapprox) + np.mean(dat[idx])
+#yapp = adjoint(t,fapprox) + np.mean(dat[idx])
+yapp = finufft.nufft1d2(t,fapprox,isign=+1) + np.mean(dat[idx])
+
 
 ifft_line, = ax.plot(t,yapp,c='C1',label='iFFT')
 ax.legend(handles=[infft_line,ifft_line])

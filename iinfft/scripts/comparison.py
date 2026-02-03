@@ -39,13 +39,13 @@ AhA1 = A.H@A
 
 fig, axs = plt.subplots(1, 2, figsize=(12, 6))
 # First plot: Imaginary part of sym_mat
-axs[0].imshow(np.imag(AhA), cmap='viridis', aspect='auto')
+axs[0].imshow(np.real(AhA), cmap='viridis', aspect='auto')
 axs[0].set_title('Imaginary Part of sym_mat')
 axs[0].set_xlabel('Columns')
 axs[0].set_ylabel('Rows')
 
 # Second plot: Imaginary part of A.H@A
-axs[1].imshow(np.imag(AhA1), cmap='viridis', aspect='auto')
+axs[1].imshow(np.real(AhA1), cmap='viridis', aspect='auto')
 axs[1].set_title('Imaginary Part of A.H@A')
 axs[1].set_xlabel('Columns')
 plt.tight_layout()
