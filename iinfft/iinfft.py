@@ -1,10 +1,45 @@
 import numpy as np
-import pandas as pd
 import finufft
-#from nfft import nfft as adjoint #CHANGE IN CONVENTION
-#from nfft import nfft_adjoint as nfft #CHANGE IN CONVENTION
 from scipy.linalg import lu,toeplitz
-#import sym_matrix
+
+def is_gpu():
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False
+        import cufinufft
+        _ = torch.cuda.current_device()
+        return True
+    except Exception:
+        return False
+
+def _torch_device(gpu: bool):
+    import torch
+    return torch.device("cuda") if (gpu and torch.cuda.is_available()) else torch.device("cpu")
+
+def _to_torch(x, device, dtype=None):
+    import torch
+    if torch.is_tensor(x):
+        return x.to(device=device, dtype=dtype) if dtype is not None else x.to(device=device)
+    # numpy -> torch
+    return torch.as_tensor(x, device=device, dtype=dtype) if dtype is not None else torch.as_tensor(x, device=device)
+
+def _pick_nufft_backend(gpu: bool):
+    """
+    Returns (use_gpu_backend, nufft_module)
+    """
+    if not gpu:
+        return False, finufft
+
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False, finufft
+        import cufinufft  # must be installed
+        _ = torch.cuda.current_device()  # forces CUDA init
+        return True, cufinufft
+    except Exception:
+        return False, finufft
 
 def ndft_mat(x,N):
     #non-equispaced discrete Fourier transform Matrix
@@ -198,11 +233,6 @@ def w_raised_cosine(N: int, alpha: float = 1.0) -> np.ndarray:
 
     return normalize_l1(w)
 
-# ------------------------------------------------------------
-# 10) “Paper-style” complex factor (1 + e^{-2π i x}) is TIME-domain.
-#     If you *really* want a complex spectral multiplier that mimics
-#     a half-sample shift, use the linear-phase helpers above.
-# ------------------------------------------------------------
 
 # Convenience: dictionary of kernel factories (optional)
 KERNELS = {
@@ -212,45 +242,102 @@ KERNELS = {
     "gaussian": w_gaussian,
     "raised_cosine": w_raised_cosine,
     "bspline_like": w_bspline_like,
-    "sobolev": w_sobolev,
-    "fejer_shifted": w_fejer_shifted,
+    "sobolev": w_sobolev
 }
 
 
-def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False):
-    
+def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=False):
+
     if x is None:
         raise ValueError("ERROR: No grid space, x, is specified.")
-
     if y is None:
         raise ValueError("ERROR: No amplitude, y, is specified.")
-
     if w is None:
         w = np.ones(N) / N
-        Warning("No weight function input; normalized uniform weight for all frequencies")
 
-    if AhA is None and approx == False:
-        A = ndft_mat(x,N)
+    if AhA is None and (approx is False):
+        A = ndft_mat(x, N)
         AhA = A.H @ A
-        Warning("No self-adjoint matrix specified; calculating based on input observations")
-    
-    if approx == False:
-        L,U = lu(AhA,permute_l=True)
-        #fk = nfft(x,y,N) @ (np.diag(w) - np.diag(w) @ L @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L) @ U @ np.diag(w))
-        fk = finufft.nufft1d1(x,y,N,isign=-1) @ (np.diag(w) - np.diag(w) @ L @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L) @ U @ np.diag(w))
+
+    use_gpu, nufft = _pick_nufft_backend(gpu=gpu)
+
+    if not use_gpu:
+        if approx is False:
+            L, U = lu(AhA, permute_l=True)
+            M = (np.diag(w)
+                 - np.diag(w) @ L
+                 @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L)
+                 @ U @ np.diag(w))
+            fk = nufft.nufft1d1(x, y, N, isign=-1) @ M
+        else:
+            fk = (nufft.nufft1d1(x, y, N, isign=-1) @ np.diag(w)) @ np.linalg.pinv(
+                len(x) * np.diag(w) + np.eye(N)
+            )
+
+        if return_adjoint:
+            fj = np.real(nufft.nufft1d2(x, fk, isign=+1))
+            res_abs = np.sum(np.abs(y - fj) ** 2)
+            res_rel = res_abs / np.sum(y ** 2)
+        else:
+            fj = res_abs = res_rel = None
+
+        return fk, fj, res_abs, res_rel
+
+    import torch
+    device = _torch_device(gpu=True)
+
+    x_t = _to_torch(x, device=device, dtype=torch.float64)
+    y_dtype = torch.complex128 if (np.iscomplexobj(y) or torch.is_complex(_to_torch(y, device))) else torch.float64
+    y_t = _to_torch(y, device=device, dtype=y_dtype)
+    w_t = _to_torch(w, device=device, dtype=y_dtype)
+
+    try:
+        Fy = nufft.nufft1d1(x_t, y_t, N, isign=-1)
+    except TypeError as e:
+        # This is the exact failure mode you saw with NumPy, but now for Torch:
+        raise TypeError(
+            "cuFINUFFT did not accept Torch CUDA tensors. "
+            "This usually means your cuFINUFFT build only supports arrays with __cuda_array_interface__ "
+        ) from e
+
+    # Ensure Fy is a torch tensor (depending on wrapper, it may return something else)
+    Fy_t = Fy if torch.is_tensor(Fy) else torch.as_tensor(Fy, device=device)
+
+    if approx is False:
+        # LU of AhA on GPU
+        AhA_t = _to_torch(AhA, device, torch.complex128)
+        Nloc = AhA_t.shape[0]
+        I = torch.eye(Nloc, dtype=torch.complex128, device=device)
+        W = torch.diag(w_t)
+
+        # Torch LU: P @ AhA = L @ U
+        LUfac, piv = torch.linalg.lu_factor(AhA_t)
+        P, L, U = torch.lu_unpack(LUfac, piv)
+        Lp = P @ L
+
+        X = I + (U @ W @ Lp)
+        Xpinv = torch.linalg.pinv(X)
+        M = W - (W @ Lp @ Xpinv @ U @ W)
+
+        fk_t = Fy_t @ M
+
     else:
-        fk = (finufft.nufft1d1(x,y,N,isign=-1) @ np.diag(w)) @ np.linalg.pinv(len(x) * np.diag(w) + np.eye(N))
-        #fk = (nfft(x,y,N) @ np.diag(w)) @ np.linalg.pinv(len(x) * np.diag(w) + np.eye(N))
-    
-    if return_adjoint == True:
-        #fj = np.real(adjoint(x,fk))
-        fj = np.real(finufft.nufft1d2(x,fk,isign=+1))
-        res_abs = np.sum(np.abs(y - fj) ** 2)
-        res_rel = res_abs / np.sum(y ** 2)
+        # Approx branch, but keep it GPU-safe (no NumPy mixing)
+        invdiag = 1.0 / (len(x_t) * w_t + 1.0)  # diagonal inverse
+        fk_t = (Fy_t * w_t) * invdiag
+
+    fk = fk_t.detach().cpu().numpy()
+
+    if return_adjoint:
+        # GPU adjoint if available through same backend
+        fj_t = nufft.nufft1d2(x_t, fk_t, isign=+1)
+        fj = torch.real(fj_t).detach().cpu().numpy()
+
+        y_cpu = np.asarray(y)
+        res_abs = np.sum(np.abs(y_cpu - fj) ** 2)
+        res_rel = res_abs / np.sum(y_cpu ** 2)
     else:
-        fj = None
-        res_abs = None
-        res_rel = None
+        fj = res_abs = res_rel = None
 
     return fk, fj, res_abs, res_rel
 

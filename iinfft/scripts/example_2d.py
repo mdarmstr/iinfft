@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from iinfft.iinfft import *
 #import sym_matrix
 import matplotlib
-from scipy.io import loadmat
+from scipy.io import loadmat, savemat
 
 matplotlib.use('TkAgg')
 
@@ -83,3 +83,12 @@ plt.savefig(zoomed_image_path, dpi=300)
 print(f"Saved zoomed-in image: {zoomed_image_path}")
 
 plt.show()
+
+mdict = {
+    'tic_rec': interpolated_image,
+    'tic_ori': image, # you can add more arrays here, e.g.
+    # 'another_array': some_other_numpy_array
+}
+
+# 3. Save to ‘data.mat’ (by default this writes MATLAB level‑5 .mat files)
+savemat('export.mat', mdict)
