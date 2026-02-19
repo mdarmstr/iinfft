@@ -11,15 +11,16 @@ matplotlib.use('TkAgg')
 image = np.load('iinfft/data/modified_image.npy')
 
 # Forward transform
-N = 128
-w = sobk(N, 0.5, 3, 1e-1)
-transformed_data, mtot = infft_2d(image, N, w=w)
+N = 32
+w = w_sobolev(N, 0.5,3, 1e-1)
+transformed_data, mtot = infft_2d(image, N, w=w,gpu=True)
 
 # Adjoint transform (reconstruction)
 reconstructed_data = adjoint_transform_2d(
     transformed_data,
     mtot,
-    data_shape=image.shape
+    data_shape=image.shape,
+    gpu=True
 )
 
 # Load the .mat file
@@ -33,7 +34,7 @@ nan_mask = np.isnan(image)
 interpolated_image[nan_mask] = reconstructed_data[nan_mask]
 
 # Use "magma" colormap (low values = deep purple, high values = bright yellow)
-cmap_choice = 'magma'
+cmap_choice = 'nipy_spectral'
 
 # Get dynamic limits for better visibility
 vmin = np.nanmin(image)  

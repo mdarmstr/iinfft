@@ -1,6 +1,7 @@
 import numpy as np
 import finufft
 from scipy.linalg import lu,toeplitz
+import torch
 
 def is_gpu():
     try:
@@ -164,32 +165,53 @@ def w_bspline_like(N: int, beta: int = 2) -> np.ndarray:
 # g(z) ∝ (1/4 - z^2)^b / (gamma + |z|^(2a)) on |z|<=1/2
 # ------------------------------------------------------------
 
-def w_sobolev(N: int, a: float = 1.0, gamma: float = 1.0, norm: str = "K0") -> np.ndarray:
+def w_sobolev(
+    N: int,
+    a: float = 0.5,
+    b: float = 3.0,
+    gamma: float = 1.0,
+    norm: str = "K0",
+) -> np.ndarray:
     """
-    Sobolev-type frequency weights (CENTERED order):
-      omega_k^{-1} = 1 + gamma * (2π |k|)^(2a)
-      omega_k      = 1 / (1 + gamma * (2π |k|)^(2a))
+    Sobolev admissible weight function following Potts & Kunis (2004)
 
-    norm:
-      - "none": no normalization
-      - "dc":   enforce omega_{k=0} = 1  (already true here)
-      - "K0":   enforce K(0)=sum_k omega_k = 1  (paper's stability assumption)
+    w_k =
+        (1/4 - (k/N)^2)^b
+        -----------------
+        (1 + gamma * (2π|k|)^(2a))
+
+    Parameters
+    ----------
+    a : Sobolev order parameter
+    b : localisation order parameter
+    gamma : regularization strength
     """
+
     if a <= 0:
         raise ValueError("a must be > 0")
+
+    if b <= 0:
+        raise ValueError("b must be > 0")
+
     if gamma <= 0:
         raise ValueError("gamma must be > 0")
 
     k = kgrid(N).astype(float)
-    w = 1.0 / (1.0 + gamma * (2.0 * np.pi * np.abs(k)) ** (2.0 * a))
+    z = k / N
+    numerator = np.maximum(0.0, 0.25 - z**2) ** b
+    denominator = 1.0 + gamma * (2*np.pi*np.abs(k))**(2*a)
+    w = numerator / denominator
 
     if norm == "none":
         return w
+
     if norm == "dc":
-        return w / w[N // 2]
+        return w / w[N//2]
+
     if norm == "K0":
         return w / np.sum(w)
-    raise ValueError("norm must be 'none', 'dc', or 'K0'")
+
+    raise ValueError("invalid norm")
 # ------------------------------------------------------------
 # Gaussian window in k
 # ------------------------------------------------------------
@@ -261,6 +283,14 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 
     use_gpu, nufft = _pick_nufft_backend(gpu=gpu)
 
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y)
+
+    if y.dtype != np.complex128 and y.dtype != np.complex64:
+        y = y.astype(np.complex128, copy=False)
+    else:
+        y = y.astype(np.complex128, copy=False)
+
     if not use_gpu:
         if approx is False:
             L, U = lu(AhA, permute_l=True)
@@ -283,7 +313,6 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 
         return fk, fj, res_abs, res_rel
 
-    import torch
     device = _torch_device(gpu=True)
 
     x_t = _to_torch(x, device=device, dtype=torch.float64)
@@ -322,9 +351,8 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
         fk_t = Fy_t @ M
 
     else:
-        # Approx branch, but keep it GPU-safe (no NumPy mixing)
-        invdiag = 1.0 / (len(x_t) * w_t + 1.0)  # diagonal inverse
-        fk_t = (Fy_t * w_t) * invdiag
+        fk_t = (nufft.nufft1d1(x, y, N, isign=-1) @ torch.diag(w)) @ torch.linalg.pinv(
+                len(x) * torch.diag(w) + torch.eye(N))
 
     fk = fk_t.detach().cpu().numpy()
 
@@ -344,8 +372,6 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 def ndft_mat_nd(spatial_points, num_frequencies_per_dim):
     """
     Constructs the non-equispaced discrete Fourier transform (NDFT) matrix for N dimensions using matmul.
-
-    C API is under sym_matrix.c in the core directory. This is very slow, and not recommended.
 
     Parameters:
         spatial_points (np.ndarray): Spatial points, shape (M, D) or (M,) for 1D.
@@ -385,7 +411,7 @@ def ndft_mat_nd(spatial_points, num_frequencies_per_dim):
     
     return transformation_matrix
 
-def infft_2d(data, N, AhA=None, w=None):
+def infft_2d(data, N, AhA=None, w=None, gpu=False):
     """
     Perform a 2D inverse non-uniform FFT (INFFT) with operations applied along columns first.
     
@@ -404,7 +430,8 @@ def infft_2d(data, N, AhA=None, w=None):
             - np.ndarray: The transformed data in 2D.
             - list: Mean values for each column.
     """
-    t = np.linspace(-0.5, 0.5, data.shape[0], endpoint=False)
+
+    t = 2*np.pi*np.linspace(-0.5, 0.5, data.shape[0], endpoint=False)
     h_k = -(N // 2) + np.arange(N)
 
     ftot_list = []
@@ -424,7 +451,7 @@ def infft_2d(data, N, AhA=None, w=None):
             idx[np.where(idx)[0][-1]] = False  # Adjust to even number of samples if needed
 
         mn = np.mean(data[idx, jj])
-        ftot, _, _, _ = infft(t[idx], data[idx, jj] - mn, N=N, AhA=AAh, w=w)
+        ftot, _, _, _ = infft(t[idx], data[idx, jj] - mn, N=N, AhA=AAh, w=w, gpu=gpu)
 
         ftot_list.append(ftot)
         mtot_list.append(mn)
@@ -437,8 +464,7 @@ def infft_2d(data, N, AhA=None, w=None):
 
     return result, mtot
 
-
-def adjoint_transform_2d(transformed_data, mtot, data_shape):
+def adjoint_transform_2d(transformed_data, mtot, data_shape, gpu=False):
     """
     Perform the adjoint of the 2D forward transform to reconstruct the original data, with operations along rows.
     
@@ -454,24 +480,45 @@ def adjoint_transform_2d(transformed_data, mtot, data_shape):
         np.ndarray
             Reconstructed data including NaNs in their original locations.
     """
-    t = np.linspace(-0.5, 0.5, data_shape[0], endpoint=False)
+    t = 2*np.pi*np.linspace(-0.5, 0.5, data_shape[0], endpoint=False)
 
     reconstructed_data = np.full(data_shape, np.nan, dtype=np.float64)  # Initialize with NaNs
 
     # Step 1: Inverse row-wise FFT
     iftot = np.fft.ifft(transformed_data, axis=1)
 
-    # Step 2: Column-wise adjoint transform
+    use_gpu, nufft = _pick_nufft_backend(gpu=gpu)
+
+    if not use_gpu:
+        for jj in range(data_shape[1]):
+            # Perform the adjoint operation
+            #adjoint_result = adjoint(t, iftot[:, jj])
+            adjoint_result = nufft.nufft1d2(t, iftot[:,jj], isign=+1)
+
+            # Restore mean and NaNs
+            reconstructed_column = adjoint_result + mtot[jj]
+            reconstructed_data[:, jj] = np.abs(reconstructed_column)
+
+        return reconstructed_data
+    
+    device = _torch_device(gpu=True)
+
+    # Torch versions on GPU
+    t_t = _to_torch(t, device=device, dtype=torch.float64)
+    td_t = _to_torch(transformed_data, device=device, dtype=torch.complex128)
+    mtot_t = _to_torch(mtot, device=device, dtype=torch.float64)
+
+    # Step 1: Inverse row-wise FFT (GPU)
+    iftot_t = torch.fft.ifft(td_t, dim=1)
+
+    # Step 2: Column-wise adjoint transform (GPU)
+    recon_t = torch.full(data_shape, torch.nan, device=device, dtype=torch.float64)
+
     for jj in range(data_shape[1]):
-        # Perform the adjoint operation
-        #adjoint_result = adjoint(t, iftot[:, jj])
-        adjoint_result = finufft.nufft1d2(t, iftot[:,jj], isign=+1)
+        adj_t = nufft.nufft1d2(t_t, iftot_t[:, jj], isign=+1)
+        recon_t[:, jj] = torch.abs(torch.real(adj_t) + mtot_t[jj])
 
-        # Restore mean and NaNs
-        reconstructed_column = adjoint_result + mtot[jj]
-        reconstructed_data[:, jj] = np.abs(reconstructed_column)
-
-    return reconstructed_data
+    return recon_t.detach().cpu().numpy()
 
 def compute_sym_matrix_optimized(f_j, h_k):
     """
