@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from iinfft.iinfft import *
-#import sym_matrix
 import matplotlib
 from scipy.io import loadmat, savemat
 
@@ -11,17 +10,13 @@ matplotlib.use('TkAgg')
 image = np.load('iinfft/data/modified_image.npy')
 
 # Forward transform
-N = 32
-w = w_sobolev(N, 0.5,3, 1e-1)
-transformed_data, mtot = infft_2d(image, N, w=w,gpu=True)
+N = 64
+w = w_sobolev(N, a=0.5,b=3,gamma=1e-1)
+
+transformed_data, mtot = infft_2d(image, N, w=w, gpu=True)
 
 # Adjoint transform (reconstruction)
-reconstructed_data = adjoint_transform_2d(
-    transformed_data,
-    mtot,
-    data_shape=image.shape,
-    gpu=True
-)
+reconstructed_data = adjoint_transform_2d(transformed_data, mtot, data_shape=image.shape, gpu=True)
 
 # Load the .mat file
 file_path = "iinfft/data/tic.mat"
@@ -87,9 +82,7 @@ plt.show()
 
 mdict = {
     'tic_rec': interpolated_image,
-    'tic_ori': image, # you can add more arrays here, e.g.
-    # 'another_array': some_other_numpy_array
+    'tic_ori': image,
 }
 
-# 3. Save to ‘data.mat’ (by default this writes MATLAB level‑5 .mat files)
 savemat('export.mat', mdict)

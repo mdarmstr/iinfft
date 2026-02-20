@@ -445,7 +445,7 @@ def infft_2d(data, N, AhA=None, w=None, gpu=False):
             mtot_list.append(0)
             continue
 
-        AAh = compute_sym_matrix_optimized(t[idx], h_k)
+        AAh = compute_sym_matrix_optimized(t[idx], h_k,gpu=gpu)
 
         if np.sum(idx) % 2 != 0:
             idx[np.where(idx)[0][-1]] = False  # Adjust to even number of samples if needed
@@ -520,7 +520,45 @@ def adjoint_transform_2d(transformed_data, mtot, data_shape, gpu=False):
 
     return recon_t.detach().cpu().numpy()
 
-def compute_sym_matrix_optimized(f_j, h_k):
+def pytorch_toeplitz(c: torch.Tensor) -> torch.Tensor:
+    """
+    Exact match to scipy.linalg.toeplitz(c) (i.e., r=None).
+
+    For complex c:
+      first row r = [c0, conj(c1), conj(c2), ...]
+      first col   = c
+    """
+    squeeze_batch = False
+    if c.ndim == 1:
+        c = c.unsqueeze(0)
+        squeeze_batch = True
+    if c.ndim != 2:
+        raise ValueError(f"c must have shape (d,) or (B,d), got {tuple(c.shape)}")
+
+    B, d = c.shape
+    if d == 0:
+        raise ValueError("d must be > 0")
+
+    # Build r exactly like SciPy: r[0]=c[0], r[1:]=conj(c[1:])
+    if torch.is_complex(c):
+        r = torch.cat([c[:, :1], c[:, 1:].conj()], dim=1)
+    else:
+        r = c
+
+    # diff = j - i
+    i = torch.arange(d, device=c.device)
+    diff = i[None, :] - i[:, None]            # (d,d) == j - i
+    idx = diff.abs().to(torch.long)           # |j - i|
+
+    # For i >= j (diff <= 0): use c[i-j] = c[|diff|]
+    # For i <  j (diff > 0): use r[j-i] = r[|diff|]
+    T = torch.where(diff <= 0, c[:, idx], r[:, idx])
+
+    if squeeze_batch:
+        T = T.squeeze(0)
+    return T
+
+def compute_sym_matrix_optimized(f_j, h_k, gpu=False):
     """
     Compute the inner product matrix when h_k is equally spaced.
     That is, compute the Toeplitz matrix A with
@@ -545,11 +583,19 @@ def compute_sym_matrix_optimized(f_j, h_k):
 
     # For a Toeplitz matrix, the entry A[i,j] depends only on (j-i).
     # Since A[0,j] is given by 'col', we build the full matrix.
-    A = toeplitz(col)
-    
-    # For numerical precision, enforce that the diagonal is exactly M.
-    # Here, on the diagonal, lag=0 so exp(0)=1, and sum_j 1 = len(f_j).
-    np.fill_diagonal(A, len(f_j))
-    
-    return A
+    if gpu is False:
+        A = toeplitz(col)
+        # For numerical precision, enforce that the diagonal is exactly M.
+        # Here, on the diagonal, lag=0 so exp(0)=1, and sum_j 1 = len(f_j).
+        np.fill_diagonal(A, len(f_j))
+        return A
+    else:
+        device = _torch_device(gpu=gpu)
+        col = _to_torch(col,device,dtype=torch.complex128)
+        A = pytorch_toeplitz(col)
+        A.fill_diagonal_(len(f_j))
+        return A
+
+
+
 
