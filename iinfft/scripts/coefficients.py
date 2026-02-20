@@ -34,7 +34,7 @@ for ii in range(len(test_gma)):
         
         N = test_fre[jj]
         gma = test_gma[ii]
-        w = sobk(N,1,2,gma)
+        w = w_sobolev(N,1,2,gma)
         
         A = ndft_mat(t[idx],N)
         AhA = A.H @ A
@@ -71,7 +71,7 @@ for ii in range(len(test_gma)):
         
         N = test_fre[jj]
         gma = test_gma[ii]
-        w = sobk(N,1,2,gma)
+        w = w_sobolev(N,1,2,gma)
         
         A = ndft_mat(t2[bl_train],N)
         AhA = A.H @ A

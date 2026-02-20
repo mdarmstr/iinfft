@@ -33,9 +33,9 @@ if sum(idx) % 2 != 0:
 
 h_k = -(N // 2 ) + np.arange(N)
 AhA = compute_sym_matrix_optimized(t[idx],h_k,gpu=False)
-AhA1 = compute_sym_matrix_optimized(t[idx],h_k,gpu=True).cpu().numpy()
-# A = ndft_mat(t[idx],N)
-# AhA1 = A.H@A
+#AhA1 = compute_sym_matrix_optimized(t[idx],h_k,gpu=True).cpu().numpy()
+A = ndft_mat(t[idx],N)
+AhA1 = A.H@A
 
 fig, axs = plt.subplots(1, 2, figsize=(12, 6))
 # First plot: Imaginary part of sym_mat

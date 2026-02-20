@@ -1,7 +1,8 @@
 /venv
-/build
+build/
+dist/
 /dist
 *.egg-info
 /.vscode
-/iinfft/__pycache__
+**/__pycache__/
 *.tar.gz

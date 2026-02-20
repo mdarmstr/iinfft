@@ -46,7 +46,7 @@ def ndft_mat(x,N):
     #non-equispaced discrete Fourier transform Matrix
     k = -(N // 2) + np.arange(N)
    
-    return np.asmatrix(np.exp(1j * np.outer(k,x[:,np.newaxis])).T)
+    return np.asarray(np.exp(-1j * np.outer(k,x[:,np.newaxis])).T)
 
 def change_last_true_to_false(arr):
     
@@ -579,7 +579,6 @@ def compute_sym_matrix_optimized(f_j, h_k, gpu=False):
     lags = d * np.arange(N)
     #col = np.array([np.sum(np.exp(-2 * np.pi * 1j * f_j * lag)) for lag in lags])
     col = np.array([np.sum(np.exp(1j * f_j * lag)) for lag in lags])
-
 
     # For a Toeplitz matrix, the entry A[i,j] depends only on (j-i).
     # Since A[0,j] is given by 'col', we build the full matrix.

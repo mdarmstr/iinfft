@@ -24,7 +24,7 @@ inverse_mat = np.zeros((N,df.shape[1]-1),dtype="complex128")
 #w = w_fejer(N)
 #w = w_raised_cosine(N,1)
 #w = fjr(N)
-w = w_sobolev(N,1,1e-2)
+w = w_sobolev(N,1,2,1e-2)
 
 # N = 64
 # k = kgrid(N)
@@ -58,7 +58,8 @@ dat_clean = dat[idx].copy().astype(np.complex128)
 h_k = -(N // 2 ) + np.arange(N)
 AhA = compute_sym_matrix_optimized(t[idx],h_k)
 
-ftot, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w,gpu=True)
+ftot, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w,gpu=
+                      False)
 #ytot = adjoint(t,ftot) + np.mean(dat[idx])
 ytot = finufft.nufft1d2(t,ftot,isign=+1) + np.mean(dat[idx])
 
@@ -74,7 +75,7 @@ ax.scatter(t[idx],dat[idx],s=0.1,c='k')
 infft_line, = ax.plot(t,ytot,c='C4',label='iNFFT')
 
 #Scatter plot of truncated iFFT
-fapprox, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w,approx=True,gpu=True)
+fapprox, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w,approx=True,gpu=False)
 #yapp = adjoint(t,fapprox) + np.mean(dat[idx])
 yapp = finufft.nufft1d2(t,fapprox,isign=+1) + np.mean(dat[idx])
 
