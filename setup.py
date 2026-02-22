@@ -20,6 +20,7 @@ setup(
         "pandas",
         # Default NUFFT backend (CPU)
         "finufft",
+        "torch"
     ],
     extras_require={
         # Optional GPU backend
