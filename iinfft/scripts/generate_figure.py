@@ -14,9 +14,9 @@ Ln = df.shape[0]
 data_raw = df.iloc[0:,1:].to_numpy() #keep the missing values
 
 N = 1024
-t = 2*np.pi*np.linspace(-0.5,0.5,Ln,endpoint=False)
-inverse_mat = np.zeros((N,df.shape[1]-1),dtype="complex128")
-w = w_sobolev(N,1,2,1e-4)
+t = 2*np.pi*np.linspace(-0.5,0.5,Ln,endpoint=False).astype(np.float32)
+#inverse_mat = np.zeros((N,df.shape[1]-1),dtype="complex128")
+w = w_sobolev(N,1,2,1e-4).astype(np.float32)
 
 # N = 64
 # k = kgrid(N)
@@ -40,13 +40,13 @@ w = w_sobolev(N,1,2,1e-4)
 #     plt.grid(True)
 #     plt.show()
 
-dat = data_raw[:,4].astype(np.complex128)
+dat = data_raw[:,4].astype(np.complex64)
 
 idx = dat != -9999
 # if sum(idx) % 2 != 0:
 #     idx = change_last_true_to_false(idx)
 
-dat_clean = dat[idx].copy().astype(np.complex128)
+dat_clean = dat[idx].copy().astype(np.complex64)
 h_k = -(N // 2 ) + np.arange(N)
 AhA = compute_sym_matrix_optimized(t[idx],h_k)
 

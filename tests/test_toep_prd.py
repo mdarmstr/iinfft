@@ -16,7 +16,7 @@ def test_toeplitz_matches_explicit_AhA():
     AhA_toeplitz = compute_sym_matrix_optimized(t, h_k, gpu=False)
 
     A = ndft_mat(t, N)
-    AhA_explicit = np.asarray(A.conj().T @ A)
+    AhA_explicit = np.asarray(A.conj().T @ A,dtype=np.complex64)
 
     diff = AhA_toeplitz - AhA_explicit
     rel = np.linalg.norm(diff) / np.linalg.norm(AhA_explicit)

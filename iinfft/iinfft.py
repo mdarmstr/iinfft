@@ -271,7 +271,6 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
                  @ U @ W)
             fk = nufft.nufft1d1(x, y, N, isign=-1) @ M
         else:
-            I = np.asarray(np.eye, dtype=np.complex64)
             fk = (nufft.nufft1d1(x, y, N, isign=-1) @ W) @ np.linalg.pinv(
                 len(x) * W + I)
 

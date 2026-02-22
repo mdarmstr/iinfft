@@ -16,16 +16,16 @@ def test_1d_infft_beats_ifft_mape():
 
     # Smaller N for CI speed
     N = 256
-    t = 2 * np.pi * np.linspace(-0.5, 0.5, Ln, endpoint=False)
+    t = 2 * np.pi * np.linspace(-0.5, 0.5, Ln, endpoint=False).astype(np.float32)
 
-    w = w_sobolev(N, a=1.0, b=3.0, gamma=1e-2)
+    w = w_sobolev(N,1,2,1e-4).astype(np.float32)
 
     # Same column choice as your script (col index 4 of data_raw)
-    dat = data_raw[:, 4].astype(np.complex128)
+    dat = data_raw[:, 4].astype(np.complex64)
 
     idx = dat != -9999
-    if idx.sum() % 2 != 0:
-        idx = change_last_true_to_false(idx)
+    # if idx.sum() % 2 != 0:
+    #     idx = change_last_true_to_false(idx)
 
     h_k = -(N // 2) + np.arange(N)
     AhA = compute_sym_matrix_optimized(t[idx], h_k, gpu=False)
