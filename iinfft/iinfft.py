@@ -253,26 +253,27 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 
     use_gpu, nufft = _pick_nufft_backend(gpu=gpu)
 
-    x = np.asarray(x, dtype=np.float64)
-    y = np.asarray(y)
+    x = np.asarray(x, dtype=np.float32)
+    W = np.asarray(np.diag(w), dtype=np.complex64)
+    I = np.asarray(np.eye(N),  dtype=np.complex64)
 
-    if y.dtype != np.complex128 and y.dtype != np.complex64:
-        y = y.astype(np.complex128, copy=False)
+    if y.dtype != np.complex64:
+        y = y.astype(np.complex64, copy=False)
     else:
-        y = y.astype(np.complex128, copy=False)
+        y = y.astype(np.complex64, copy=False)
 
     if not use_gpu:
         if approx is False:
             L, U = lu(AhA, permute_l=True)
-            M = (np.diag(w)
-                 - np.diag(w) @ L
-                 @ np.linalg.pinv(np.eye(N) + U @ np.diag(w) @ L)
-                 @ U @ np.diag(w))
+            M = (W
+                 - W @ L
+                 @ np.linalg.pinv(I + U @ W @ L)
+                 @ U @ W)
             fk = nufft.nufft1d1(x, y, N, isign=-1) @ M
         else:
-            fk = (nufft.nufft1d1(x, y, N, isign=-1) @ np.diag(w)) @ np.linalg.pinv(
-                len(x) * np.diag(w) + np.eye(N)
-            )
+            I = np.asarray(np.eye, dtype=np.complex64)
+            fk = (nufft.nufft1d1(x, y, N, isign=-1) @ W) @ np.linalg.pinv(
+                len(x) * W + I)
 
         if return_adjoint:
             fj = np.real(nufft.nufft1d2(x, fk, isign=+1))
@@ -285,15 +286,14 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 
     device = _torch_device(gpu=True)
 
-    x_t = _to_torch(x, device=device, dtype=torch.float64)
-    y_dtype = torch.complex128 if (np.iscomplexobj(y) or torch.is_complex(_to_torch(y, device))) else torch.float64
-    y_t = _to_torch(y, device=device, dtype=y_dtype)
-    w_t = _to_torch(w, device=device, dtype=y_dtype)
+    x_t = _to_torch(x, device=device, dtype=torch.float32)
+    #y_dtype = torch.complex64 if (np.iscomplexobj(y) or torch.is_complex(_to_torch(y, device))) else torch.float32
+    y_t = _to_torch(y, device=device, dtype=torch.complex64)
+    w_t = _to_torch(w, device=device, dtype=torch.complex64)
 
     try:
         Fy = nufft.nufft1d1(x_t, y_t, N, isign=-1)
     except TypeError as e:
-        # This is the exact failure mode you saw with NumPy, but now for Torch:
         raise TypeError(
             "cuFINUFFT did not accept Torch CUDA tensors. "
             "This usually means your cuFINUFFT build only supports arrays with __cuda_array_interface__ "
@@ -304,9 +304,9 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 
     if approx is False:
         # LU of AhA on GPU
-        AhA_t = _to_torch(AhA, device, torch.complex128)
+        AhA_t = _to_torch(AhA, device, torch.complex64)
         Nloc = AhA_t.shape[0]
-        I = torch.eye(Nloc, dtype=torch.complex128, device=device)
+        I = torch.eye(Nloc, dtype=torch.complex64, device=device)
         W = torch.diag(w_t)
 
         # Torch LU: P @ AhA = L @ U
@@ -321,8 +321,10 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
         fk_t = Fy_t @ M
 
     else:
-        fk_t = (nufft.nufft1d1(x, y, N, isign=-1) @ torch.diag(w)) @ torch.linalg.pinv(
-                len(x) * torch.diag(w) + torch.eye(N))
+        I = torch.eye(Nloc, dtype=torch.complex64, device=device)
+        W = torch.diag(w_t, dtype=torch.complex64, device=device)
+        fk_t = (nufft.nufft1d1(x, y, N, isign=-1) @ W) @ torch.linalg.pinv(
+                len(x) * W + I)
 
     fk = fk_t.detach().cpu().numpy()
 
@@ -450,16 +452,16 @@ def adjoint_transform_2d(transformed_data, mtot, data_shape, gpu=False):
         np.ndarray
             Reconstructed data including NaNs in their original locations.
     """
-    t = 2*np.pi*np.linspace(-0.5, 0.5, data_shape[0], endpoint=False)
+    t = 2*np.pi*np.linspace(-0.5, 0.5, data_shape[0], endpoint=False, dtype=np.float32)
 
-    reconstructed_data = np.full(data_shape, np.nan, dtype=np.float64)  # Initialize with NaNs
+    reconstructed_data = np.full(data_shape, np.nan, dtype=np.float32)  # Initialize with NaNs
 
     # Step 1: Inverse row-wise FFT
-    iftot = np.fft.ifft(transformed_data, axis=1)
-
     use_gpu, nufft = _pick_nufft_backend(gpu=gpu)
 
     if not use_gpu:
+        iftot = np.fft.ifft(transformed_data, axis=1)
+
         for jj in range(data_shape[1]):
             # Perform the adjoint operation
             #adjoint_result = adjoint(t, iftot[:, jj])
@@ -474,15 +476,15 @@ def adjoint_transform_2d(transformed_data, mtot, data_shape, gpu=False):
     device = _torch_device(gpu=True)
 
     # Torch versions on GPU
-    t_t = _to_torch(t, device=device, dtype=torch.float64)
-    td_t = _to_torch(transformed_data, device=device, dtype=torch.complex128)
-    mtot_t = _to_torch(mtot, device=device, dtype=torch.float64)
+    t_t = _to_torch(t, device=device, dtype=torch.float32)
+    td_t = _to_torch(transformed_data, device=device, dtype=torch.complex64)
+    mtot_t = _to_torch(mtot, device=device, dtype=torch.float32)
 
     # Step 1: Inverse row-wise FFT (GPU)
     iftot_t = torch.fft.ifft(td_t, dim=1)
 
     # Step 2: Column-wise adjoint transform (GPU)
-    recon_t = torch.full(data_shape, torch.nan, device=device, dtype=torch.float64)
+    recon_t = torch.full(data_shape, torch.nan, device=device, dtype=torch.float32)
 
     for jj in range(data_shape[1]):
         adj_t = nufft.nufft1d2(t_t, iftot_t[:, jj], isign=+1)
@@ -557,10 +559,10 @@ def compute_sym_matrix_optimized(f_j, h_k, gpu=False):
         # For numerical precision, enforce that the diagonal is exactly M.
         # Here, on the diagonal, lag=0 so exp(0)=1, and sum_j 1 = len(f_j).
         np.fill_diagonal(A, len(f_j))
-        return A
+        return A.astype(np.complex64)
     else:
         device = _torch_device(gpu=gpu)
-        col = _to_torch(col,device,dtype=torch.complex128)
+        col = _to_torch(col,device,dtype=torch.complex64)
         A = pytorch_toeplitz(col)
         A.fill_diagonal_(len(f_j))
         return A
