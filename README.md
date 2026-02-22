@@ -15,7 +15,7 @@ Unlike the Fast Fourier Transform and its inverse in the equidistant case, the n
 
 Formally, this package performs the inverse adjoint non-uniform fast fourier transform as defined by our convention via the minimisation of the cost function:
 
-$${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||2^2 + ||\hat{h}_k||^2_{\hat{W}^{-1}} $$
+$${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||_2^2 + ||\hat{h}_k||^2_{\hat{W}^{-1}} $$
 
 # Installation
 
