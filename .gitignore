@@ -1,4 +1,4 @@
-/venv
+venv/
 build/
 dist/
 /dist
@@ -6,3 +6,4 @@ dist/
 /.vscode
 **/__pycache__/
 *.tar.gz
+*.pytest_cache

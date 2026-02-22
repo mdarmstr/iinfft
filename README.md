@@ -15,7 +15,7 @@ Unlike the Fast Fourier Transform and its inverse in the equidistant case, the n
 
 Formally, this package performs the inverse adjoint non-uniform fast fourier transform as defined by our convention via the minimisation of the cost function:
 
-$${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||_W$$
+$${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||2^2 + ||\hat{h}_k||^2_{\hat{W}^{-1}} $$
 
 # Installation
 
@@ -29,38 +29,37 @@ This module contains functionality for 1D and 2D Numpy arrays. An example of an 
 
 ```
 import numpy as np
+import finufft
 from iinfft.iinfft import *
-import sym_matrix
+
 
 N = 1024
-t = np.linspace(-0.5,0.5,Ln,endpoint=False)
-w = sobk(N,1,2,1e-2)
+t = 2*np.pi*np.linspace(-0.5,0.5,Ln,endpoint=False)
+w = w_sobolev(N,1,2,1e-2)
 
 dat = data_raw[:,0]
 
 idx = dat != -9999
-if sum(idx) % 2 != 0:
-    idx = change_last_true_to_false(idx)
 
 dat_clean = dat[idx].copy()
 h_k = -(N // 2 ) + np.arange(N)
 AhA = compute_sym_matrix_optimized(t[idx],h_k)
 
 ftot, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w)
-ytot = adjoint(t,ftot) + np.mean(dat[idx])
+ytot = finufft.nufft1d2(t,ftot,isign=+1) + np.mean(dat[idx])
 ```
 A similar procedure can be followed for 2D arrays, which calculate the parallel iiNFFTSs followed by parallel FFTs on the opposite mode.
 
 ```
 N = 64
-w = sobk(N,1,2,1e-2)
+w = w_sobolev(N,1,2,1e-2)
 transformed_data, mtot = infft_2d(image, N,w=w)
 
 # Adjoint transform (reconstruction)
 reconstructed_data = adjoint_transform_2d(
     transformed_data,
     mtot,
-    data_shape=image.shape
+    data_shape=image.shape)
 ```
 # Authors
 Computational Data Science (CoDaS) Lab, University of Granada
@@ -69,7 +68,7 @@ José Camacho
 
 ## Copyright
 
-Copyright (C) 2025  Universidad de Granada
+Copyright (C) 2026  Universidad de Granada
  
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.

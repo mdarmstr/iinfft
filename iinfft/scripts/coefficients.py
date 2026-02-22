@@ -2,28 +2,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from iinfft.iinfft import *
+import finufft
 plt.style.use('tableau-colorblind10')
+
+# FINUFFT convention: x (nodes) are radians in [-pi, pi); isign controls +/- in exp(± i k x)
 
 df = pd.read_csv('iinfft/data/T.Suelo.csv')
 Ln = df.shape[0]
 smplR = 1800
 data_raw = df.iloc[0:,1:].to_numpy() #keep the missing values
-inverse_mat = np.zeros_like(data_raw,dtype="complex128")
-residue_mat = np.zeros_like(data_raw,dtype="float64")
-rec_mat = np.zeros_like(data_raw,dtype="float64")
 mni = np.zeros((df.shape[1]-1,1))
 
-N = 1024
-t = np.linspace(-0.5,0.5,Ln,endpoint=False)
-inverse_mat = np.zeros((N,df.shape[1]-1),dtype="complex128")
+t = 2*np.pi*np.linspace(-0.5,0.5,Ln,endpoint=False)
 #w = fjr(N)
 
 test_gma = [1e-1,1e-2,1e-3,1e-4,1e-5,1e-6]
 test_fre = [16,32,64,128,256,512,1024,2048]
 
 dat = data_raw[:,10]
-
 idx = dat != -9999
+
 if sum(idx) % 2 != 0:
     idx = change_last_true_to_false(idx)
 
@@ -35,11 +33,11 @@ for ii in range(len(test_gma)):
         N = test_fre[jj]
         gma = test_gma[ii]
         w = w_sobolev(N,1,2,gma)
-        
-        A = ndft_mat(t[idx],N)
-        AhA = A.H @ A
+        h_k = -(N // 2) + np.arange(N)
+        AhA = compute_sym_matrix_optimized(t[idx],h_k)
+        #AhA = A.H @ A
         f_pred, _, _, res_rel = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w,return_adjoint=True)
-        results_mat[ii,jj] = 1 - res_rel
+        results_mat[ii,jj] = 1 - np.abs(res_rel)
         print(f'gma {ii} and N {jj} complete')
 
 plt.imshow(results_mat,origin='upper')
@@ -72,11 +70,11 @@ for ii in range(len(test_gma)):
         N = test_fre[jj]
         gma = test_gma[ii]
         w = w_sobolev(N,1,2,gma)
-        
-        A = ndft_mat(t2[bl_train],N)
-        AhA = A.H @ A
+        h_k = -(N // 2) + np.arange(N)
+        AhA = compute_sym_matrix_optimized(t2[bl_train],h_k)
+
         f_pred, _, _, _ = infft(t2[bl_train], dat_clean[bl_train] - np.mean(dat_clean[bl_train]),N=N,AhA=AhA,w=w)
-        y_recn = adjoint(t[idx],f_pred) + np.mean(dat_clean[bl_train]) #reconstruction only evaluated on the artificially removed data
+        y_recn = finufft.nufft1d2(t[idx],f_pred,isign=+1) + np.mean(dat_clean[bl_train]) #reconstruction only evaluated on the artificially removed data
         results_mat[ii,jj] = 1 - len(bl_test)**(-1) * np.sum(np.abs(np.divide(y_recn[bl_test] - dat_clean[bl_test],dat_clean[bl_test])))
         print(f'gma {ii} and N {jj} complete')
         

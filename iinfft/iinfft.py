@@ -70,28 +70,24 @@ def kgrid(N: int) -> np.ndarray:
     return -(N // 2) + np.arange(N)
 
 def normalize_l1(w: np.ndarray, eps: float = 1e-30) -> np.ndarray:
-    """Normalize weights so sum(w)=1 (safe)."""
+    """Normalize weights so sum(w)=1."""
     s = np.sum(w)
     if np.abs(s) < eps:
         raise ValueError("Weight vector sums to ~0; cannot normalize.")
     return w / s
 
 def enforce_real_if_close(w: np.ndarray, tol: float = 1e-14) -> np.ndarray:
-    """If imaginary part is tiny, drop it (helps keep things clean)."""
+    """Numerical conditioning"""
     if np.iscomplexobj(w) and np.max(np.abs(np.imag(w))) < tol:
         return np.real(w)
     return w
 
-# ------------------------------------------------------------
 # Dirichlet / rectangular window (uniform on kept band)
-# ------------------------------------------------------------
 def w_dirichlet(N: int) -> np.ndarray:
     """Uniform weights on I_N (rectangular window)."""
     return np.ones(N, dtype=float) / N
 
-# ------------------------------------------------------------
 # Fejér / Cesàro (triangular multiplier; real, even, >=0)
-# ------------------------------------------------------------
 def w_fejer(N: int) -> np.ndarray:
     """
     Fejér (Cesàro) weights on centered grid.
@@ -104,10 +100,7 @@ def w_fejer(N: int) -> np.ndarray:
     w = np.maximum(0.0, 1.0 - (np.abs(k) / (K + 1.0)))
     return normalize_l1(w)
 
-
-# ------------------------------------------------------------
 # Jackson-like (stronger damping): (Fejér)^p, renormalized
-# ------------------------------------------------------------
 def w_jackson(N: int, p: int = 2) -> np.ndarray:
     """
     Jackson-like weights: (Fejér triangle)^p, renormalized.
@@ -118,10 +111,8 @@ def w_jackson(N: int, p: int = 2) -> np.ndarray:
     w = w_fejer(N) ** p
     return normalize_l1(w)
 
-# ------------------------------------------------------------
+
 # General admissible-weight construction w(k) from g(k/N)
-# Optionally neighbor-average (as in some constructions).
-# ------------------------------------------------------------
 def w_from_g(N: int, g, average_neighbors: bool = True) -> np.ndarray:
     """
     Build weights from an admissible weight function g(z) supported on [-1/2, 1/2],
@@ -139,14 +130,12 @@ def w_from_g(N: int, g, average_neighbors: bool = True) -> np.ndarray:
 
     return normalize_l1(w)
 
-# ------------------------------------------------------------
 # B-spline-like family (compact support; beta controls smoothness)
-# Proxy: g_beta(z) ∝ (1/4 - z^2)^(beta-1) on |z|<=1/2
-# ------------------------------------------------------------
+# Proxy: g_beta(z) \propto (1/4 - z^2)^(beta-1) on |z|<=1/2
 def w_bspline_like(N: int, beta: int = 2) -> np.ndarray:
     """
     Compactly-supported B-spline-like weights on z=k/N:
-      g_beta(z) ∝ (1/4 - z^2)^(beta-1) for |z|<=1/2, else 0.
+      g_beta(z) \propto (1/4 - z^2)^(beta-1) for |z|<=1/2, else 0.
     beta=1 -> flatter
     beta=2 -> hat-ish
     higher -> smoother/more concentrated
@@ -160,11 +149,8 @@ def w_bspline_like(N: int, beta: int = 2) -> np.ndarray:
 
     return w_from_g(N, g, average_neighbors=True)
 
-# ------------------------------------------------------------
 # Sobolev-type weights (matches your sobg idea; as multiplier)
-# g(z) ∝ (1/4 - z^2)^b / (gamma + |z|^(2a)) on |z|<=1/2
-# ------------------------------------------------------------
-
+# g(z) \propto (1/4 - z^2)^b / (gamma + |z|^(2a)) on |z|<=1/2
 def w_sobolev(
     N: int,
     a: float = 0.5,
@@ -212,9 +198,8 @@ def w_sobolev(
         return w / np.sum(w)
 
     raise ValueError("invalid norm")
-# ------------------------------------------------------------
+
 # Gaussian window in k
-# ------------------------------------------------------------
 def w_gaussian(N: int, sigma: float = 0.25) -> np.ndarray:
     """
     Gaussian multiplier in centered k:
@@ -227,9 +212,7 @@ def w_gaussian(N: int, sigma: float = 0.25) -> np.ndarray:
     w = np.exp(-(x**2))
     return normalize_l1(w)
 
-# ------------------------------------------------------------
 # Raised-cosine (Tukey/Hann-like) taper over k
-# ------------------------------------------------------------
 def w_raised_cosine(N: int, alpha: float = 1.0) -> np.ndarray:
     """
     Raised-cosine taper over centered k.
@@ -254,19 +237,6 @@ def w_raised_cosine(N: int, alpha: float = 1.0) -> np.ndarray:
     w[taper] = 0.5 * (1 + np.cos(np.pi * v))
 
     return normalize_l1(w)
-
-
-# Convenience: dictionary of kernel factories (optional)
-KERNELS = {
-    "dirichlet": w_dirichlet,
-    "fejer": w_fejer,
-    "jackson": w_jackson,
-    "gaussian": w_gaussian,
-    "raised_cosine": w_raised_cosine,
-    "bspline_like": w_bspline_like,
-    "sobolev": w_sobolev
-}
-
 
 def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=False):
 
@@ -306,8 +276,8 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
 
         if return_adjoint:
             fj = np.real(nufft.nufft1d2(x, fk, isign=+1))
-            res_abs = np.sum(np.abs(y - fj) ** 2)
-            res_rel = res_abs / np.sum(y ** 2)
+            res_abs = np.abs(np.sum(np.abs(y - fj) ** 2))
+            res_rel = np.abs(res_abs / np.sum(y ** 2))
         else:
             fj = res_abs = res_rel = None
 
@@ -362,8 +332,8 @@ def infft(x, y, N, AhA=None, w=None, return_adjoint=False, approx=False, gpu=Fal
         fj = torch.real(fj_t).detach().cpu().numpy()
 
         y_cpu = np.asarray(y)
-        res_abs = np.sum(np.abs(y_cpu - fj) ** 2)
-        res_rel = res_abs / np.sum(y_cpu ** 2)
+        res_abs = np.abs(np.sum(np.abs(y_cpu - fj) ** 2))
+        res_rel = np.abs(res_abs / np.sum(y_cpu ** 2))
     else:
         fj = res_abs = res_rel = None
 
