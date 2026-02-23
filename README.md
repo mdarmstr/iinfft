@@ -17,11 +17,19 @@ Formally, this package performs the inverse adjoint non-uniform fast fourier tra
 
 $${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||_2^2 + ||\hat{h}_k||^2_{\hat{W}^{-1}} $$
 
-# Installation
+# Installation (CPU)
 
 ```
 git clone https://github.com/mdarmstr/iinfft
-python setup.py install
+cd iinfft
+pip install .
+```
+# Installation (CUDA)
+
+```
+git clone https://github.com/mdarmstr/iinfft
+cd iinfft
+pip install .[gpu]
 ```
 
 # Basic usage
@@ -32,6 +40,7 @@ import numpy as np
 import finufft
 from iinfft.iinfft import *
 
+data_raw = np.load("data/T.Suelo.csv")
 
 N = 1024
 t = 2*np.pi*np.linspace(-0.5,0.5,Ln,endpoint=False)
