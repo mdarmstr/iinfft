@@ -15,7 +15,7 @@ Unlike the Fast Fourier Transform and its inverse in the equidistant case, the n
 
 Formally, this package performs the inverse adjoint non-uniform fast fourier transform as defined by our convention via the minimisation of the cost function:
 
-$${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||2^2 + ||\hat{h}_k||^2_{\hat{W}^{-1}} $$
+$${argmin}_{\hat{h}_k}||f(x_j) - A^H\hat{h}_k||_2^2 + ||\hat{h}_k||^2_{\hat{W}^{-1}} $$
 
 # Installation
 
@@ -46,7 +46,7 @@ h_k = -(N // 2 ) + np.arange(N)
 AhA = compute_sym_matrix_optimized(t[idx],h_k)
 
 ftot, _, _, _ = infft(t[idx], dat[idx] - np.mean(dat[idx]),N=N,AhA=AhA,w=w)
-ytot = finufft.nufft1d2(t,ftot,isign=+1) + np.mean(dat[idx])
+ytot = finufft.nufft1d2(t,ftot,isign=+1) + np.mean(dat[idx],isign=+1)
 ```
 A similar procedure can be followed for 2D arrays, which calculate the parallel iiNFFTSs followed by parallel FFTs on the opposite mode.
 
